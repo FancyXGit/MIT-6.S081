@@ -104,5 +104,6 @@ sys_trace(void)
   {
     return -1;
   }
+  trace(mask);
   return 0;
 }
