@@ -27,9 +27,9 @@ struct {
 void
 kinit()
 {
+  kmem.nfree = 0;
   initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
-  kmem.nfree = 0;
 }
 
 void
@@ -61,7 +61,7 @@ kfree(void *pa)
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
-  kmem.nfree--;
+  kmem.nfree++;
   release(&kmem.lock);
 }
 
@@ -76,8 +76,10 @@ kalloc(void)
   acquire(&kmem.lock);
   r = kmem.freelist;
   if(r)
+  {
     kmem.freelist = r->next;
-  kmem.nfree++;
+    kmem.nfree--;
+  }
   release(&kmem.lock);
 
   if(r)
@@ -88,5 +90,9 @@ kalloc(void)
 uint64
 get_nfree(void)
 {
-  return kmem.nfree;
+  uint64 n;
+    acquire(&kmem.lock);
+    n = kmem.nfree;
+    release(&kmem.lock);
+  return n * PGSIZE;
 }
