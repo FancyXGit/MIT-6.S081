@@ -693,7 +693,7 @@ int pgacess(uint64 base, int size, uint64 user_addr)
 {
   uint64 addr = PGROUNDDOWN(base);
   uint32 res = 0;
-  if (size > 32)
+  if (size > 32 || size < 0)
   {
     return -1;
   }
@@ -705,14 +705,17 @@ int pgacess(uint64 base, int size, uint64 user_addr)
     pte_t *pte = walk(user_pagetable, curr_addr, 0);
     if (pte != 0)
     {
+      if (!(*pte & PTE_V))
+      {
+        continue;
+      }
       int is_access = !!(*pte & PTE_A);
       if (is_access)
       {
         res = res | (1 << i);
-        *pte = *pte & (!PTE_A);
+        *pte = *pte & (~PTE_A);
       }
     }
   }
-  copyout(user_pagetable, user_addr, (char *)&res, sizeof(res));
-  return 0;
+  return copyout(user_pagetable, user_addr, (char *)&res, sizeof(res));
 }
