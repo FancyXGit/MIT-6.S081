@@ -688,3 +688,31 @@ procdump(void)
     printf("\n");
   }
 }
+
+int pgacess(uint64 base, int size, uint64 user_addr)
+{
+  uint64 addr = PGROUNDDOWN(base);
+  uint32 res = 0;
+  if (size > 32)
+  {
+    return -1;
+  }
+  struct proc *p = myproc();
+  pagetable_t user_pagetable = p->pagetable;
+  for (int i = 0; i < size; i++)
+  {
+    uint64 curr_addr = addr + i * PGSIZE;
+    pte_t *pte = walk(user_pagetable, curr_addr, 0);
+    if (pte != 0)
+    {
+      int is_access = !!(*pte & PTE_A);
+      if (is_access)
+      {
+        res = res | (1 << i);
+        *pte = *pte & (!PTE_A);
+      }
+    }
+  }
+  copyout(user_pagetable, user_addr, (char *)&res, sizeof(res));
+  return 0;
+}
