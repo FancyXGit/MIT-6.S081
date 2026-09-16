@@ -127,6 +127,11 @@ found:
     return 0;
   }
 
+  // alarm init
+  p->interval = 0;
+  p->user_handler = 0;
+  p->ticks_elapsed = 0;
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -653,4 +658,16 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+int sigalarm(int interval, uint64 user_handler)
+{
+  struct proc *p = myproc();
+  if (interval < 0)
+  {
+    return -1;
+  }
+  p->interval = interval;
+  p->user_handler = user_handler;
+  return 0;
 }
