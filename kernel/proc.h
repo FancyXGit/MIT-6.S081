@@ -110,4 +110,6 @@ struct proc {
   int interval;
   uint64 user_handler;
   int ticks_elapsed;
+  int is_in_handler;
+  struct trapframe alarm_trapframe;
 };

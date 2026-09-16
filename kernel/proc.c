@@ -131,6 +131,7 @@ found:
   p->interval = 0;
   p->user_handler = 0;
   p->ticks_elapsed = 0;
+  p->is_in_handler = 0;
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
@@ -670,4 +671,11 @@ int sigalarm(int interval, uint64 user_handler)
   p->interval = interval;
   p->user_handler = user_handler;
   return 0;
+}
+
+void sigreturn(void)
+{
+  struct proc *p = myproc();
+  *(p->trapframe) = p->alarm_trapframe;
+  p->is_in_handler = 0;
 }
