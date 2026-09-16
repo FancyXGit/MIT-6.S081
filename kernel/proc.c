@@ -670,12 +670,14 @@ int sigalarm(int interval, uint64 user_handler)
   }
   p->interval = interval;
   p->user_handler = user_handler;
+  p->ticks_elapsed = 0;
   return 0;
 }
 
-void sigreturn(void)
+int sigreturn(void)
 {
   struct proc *p = myproc();
   *(p->trapframe) = p->alarm_trapframe;
   p->is_in_handler = 0;
+  return p->trapframe->a0;
 }

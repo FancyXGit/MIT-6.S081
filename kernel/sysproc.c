@@ -113,6 +113,7 @@ uint64 sys_sigalarm(void)
 
 uint64 sys_sigreturn(void)
 {
-  sigreturn();
-  return 0;
+  // sigreturn返回函数上下文里面的a0，syscall里面会将trapframe里面的a0改为sys_sigreturn的返回值
+  // 为了满足题目要求，所有的寄存器都要保存，因此这里返回旧值，不做更改
+  return sigreturn();
 }
