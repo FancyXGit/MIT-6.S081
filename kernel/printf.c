@@ -138,7 +138,7 @@ void backtrace_helper(uint64 fp)
   uint64 ra = *((uint64 *)(fp - 8));
   uint64 prev_fp = *((uint64 *)(fp - 16));
 
-  if (prev_fp >= PGROUNDUP(fp) || prev_fp < PGROUNDDOWN(fp) || prev_fp <= fp)
+  if (prev_fp > PGROUNDUP(fp) || prev_fp <= PGROUNDDOWN(fp) || prev_fp <= fp)
   {
     return;
   }
