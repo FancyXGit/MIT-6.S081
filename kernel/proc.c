@@ -674,7 +674,7 @@ int sigalarm(int interval, uint64 user_handler)
   return 0;
 }
 
-int sigreturn(void)
+uint64 sigreturn(void)
 {
   struct proc *p = myproc();
   *(p->trapframe) = p->alarm_trapframe;
