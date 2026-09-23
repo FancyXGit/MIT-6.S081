@@ -65,3 +65,10 @@
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+
+// 总共物理地址页数（从0x8000 0000到PHYSTOP
+#define PGCNT ((PHYSTOP - KERNBASE) / PGSIZE)
+// 由地址找到对应物理页地址索引
+#define PGIDX(pa) (((uint64)(pa) - KERNBASE) / PGSIZE)
+
+

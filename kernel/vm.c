@@ -301,9 +301,8 @@ int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
+  pte_t *new_pte;
   uint64 pa, i;
-  uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -311,14 +310,21 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    
+    // 将可写页设为COW页并设置只读
+    if (*pte & PTE_W)
+    {
+      *pte &= ~PTE_W;
+      *pte |= PTE_COW;
+    }
+    // 设置子页表，简单复制
+    if ((new_pte = walk(new, i, 1)) == 0)
+    {
       goto err;
     }
+    *new_pte = *pte;
+    // 增加对应页的引用计数
+    addpgcnt((void *)pa);
   }
   return 0;
 
@@ -340,6 +346,40 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+uint64
+walkaddr_forout(pagetable_t pagetable, uint64 va)
+{
+  if (va >= MAXVA)
+  {
+    return 0;
+  }
+
+  pte_t *pte = walk(pagetable, va, 0);
+  if (pte == 0)
+    return 0;
+  if ((*pte & PTE_V) == 0)
+    return 0;
+  if ((*pte & PTE_U) == 0)
+    return 0;
+  if ((*pte & PTE_W) == 0)
+  {
+    if (*pte & PTE_COW)
+    {
+      // 对于COW, 走vmfault
+      if (vmfault(pagetable, MAXVA, va) < 0) // MAXVA禁用sz检查(暂时图省事这么写)
+      {
+        return 0;
+      }
+      // 找到最新地址
+      pte_t *pte = walk(pagetable, va, 0);
+      if (pte == 0)
+        return 0;
+      return PTE2PA(*pte);
+    }
+  }
+  return PTE2PA(*pte);
+}
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -350,9 +390,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
+    pa0 = walkaddr_forout(pagetable, va0);
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
@@ -431,4 +470,46 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int vmfault(pagetable_t pagetable, uint64 proc_sz, uint64 va)
+{
+  // 只处理COW store异常
+  // 检查va与sz
+  if (va >= proc_sz)
+  {
+    return -1;
+  }
+  va = PGROUNDDOWN(va);
+  pte_t *pte;
+  if ((pte = walk(pagetable, va, 0)) == 0)
+  {
+    // 虚拟地址没有映射，不应该发生，直接panic
+    panic("vmfault: virtual address not mapping\n");
+  }
+  if (*pte & PTE_COW)
+  {
+    void *pa = (void *)PTE2PA(*pte);
+    // 是COW，开始处理
+    int situation = splitpg(pa);
+    if (situation == 1)
+    {
+      // 引用计数为1的情况
+      *pte |= PTE_W;
+      *pte &= ~PTE_COW;
+      return 0;
+    } else if (situation == 2){
+      // 引用计数大于1，分配新的页，在splitpg中引用次数已经减了1
+      void *new_pa = kalloc();
+      if (new_pa == 0)
+      {
+        return -1;
+      }
+      int flag = ((PTE_FLAGS(*pte)) | (PTE_W)) & (~PTE_COW);
+      // 设置与之前一致的位，除PTE_W为1，PTE_COW为0
+      *pte = PA2PTE(new_pa) | flag;
+    }
+  }
+  // 非COW，退出
+  return -1;
 }
