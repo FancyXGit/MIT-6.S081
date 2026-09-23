@@ -515,6 +515,7 @@ int vmfault(pagetable_t pagetable, uint64 proc_sz, uint64 va)
       int flag = ((PTE_FLAGS(*pte)) | (PTE_W)) & (~PTE_COW);
       // 设置与之前一致的位，除PTE_W为1，PTE_COW为0
       *pte = PA2PTE(new_pa) | flag;
+      return 0;
     }
   }
   // 非COW，退出

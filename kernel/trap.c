@@ -67,7 +67,7 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if ((r_scause() == 15) && vmfault(p->pagetable, p->sz, r_stval()) != 0){
+  } else if ((r_scause() == 15) && vmfault(p->pagetable, p->sz, r_stval()) == 0){
     // 只处理15 store页故障，如果vmfault报错到else分支
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
