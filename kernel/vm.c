@@ -376,6 +376,7 @@ walkaddr_forout(pagetable_t pagetable, uint64 va)
         return 0;
       return PTE2PA(*pte);
     }
+    return 0;
   }
   return PTE2PA(*pte);
 }
@@ -391,6 +392,10 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr_forout(pagetable, va0);
+    if (pa0 == 0)
+    {
+      return -1;
+    }
 
     n = PGSIZE - (dstva - va0);
     if(n > len)
@@ -503,8 +508,10 @@ int vmfault(pagetable_t pagetable, uint64 proc_sz, uint64 va)
       void *new_pa = kalloc();
       if (new_pa == 0)
       {
+        addpgcnt(pa);
         return -1;
       }
+      memmove(new_pa, pa, PGSIZE);
       int flag = ((PTE_FLAGS(*pte)) | (PTE_W)) & (~PTE_COW);
       // 设置与之前一致的位，除PTE_W为1，PTE_COW为0
       *pte = PA2PTE(new_pa) | flag;
