@@ -17,6 +17,21 @@ struct entry *table[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
+pthread_rwlock_t locks[NBUCKET];
+
+int hashinit(void)
+{
+  for (int i = 0; i < NBUCKET; i++)
+  {
+    table[i] = NULL;
+    int ret = pthread_rwlock_init(&locks[i], NULL);
+    if (ret != 0)
+    {
+      return ret;
+    }
+  }
+  return 0;
+}
 
 double
 now()
@@ -41,6 +56,9 @@ void put(int key, int value)
 {
   int i = key % NBUCKET;
 
+  // 上对应桶写锁
+  pthread_rwlock_wrlock(&locks[i]);
+
   // is the key already present?
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
@@ -55,6 +73,8 @@ void put(int key, int value)
     insert(key, value, &table[i], table[i]);
   }
 
+  // 解锁
+  pthread_rwlock_unlock(&locks[i]);
 }
 
 static struct entry*
@@ -62,12 +82,16 @@ get(int key)
 {
   int i = key % NBUCKET;
 
+  // 上读锁
+  pthread_rwlock_rdlock(&locks[i]);
 
   struct entry *e = 0;
   for (e = table[i]; e != 0; e = e->next) {
     if (e->key == key) break;
   }
 
+  // 解锁
+  pthread_rwlock_unlock(&locks[i]);
   return e;
 }
 
@@ -110,6 +134,14 @@ main(int argc, char *argv[])
     fprintf(stderr, "Usage: %s nthreads\n", argv[0]);
     exit(-1);
   }
+
+  int ret = 0;
+  if ((ret = hashinit()) != 0)
+  {
+    fprintf(stderr, "hashinit return %d\n", ret);
+    exit(-1);
+  }
+
   nthread = atoi(argv[1]);
   tha = malloc(sizeof(pthread_t) * nthread);
   srandom(0);
