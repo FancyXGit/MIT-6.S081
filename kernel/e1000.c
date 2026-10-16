@@ -102,7 +102,39 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
-  
+
+  acquire(&e1000_lock);
+
+  // 读取TDT寄存器，得知TX环形缓冲区的末尾
+  uint32 tdt = regs[E1000_TDT];
+  // 检查环是否溢出，即TDT对应的描述符DD为0
+  // TX:  [TDH ......... TDT)为硬件拥有的区间
+  // TDH为消费者硬件推进，每发完一个包就将DD置为1，然后TDH++
+  // TDT为软件推进，每要发一个包就在TDT填入数据，然后TDT++
+  // 当TDT为0，说明TDT向前赶到了TDH，硬件占用了全部，环满
+  struct tx_desc *d = &tx_ring[tdt];
+  if ((d->status & E1000_TXD_STAT_DD) == 0)
+  {
+    release(&e1000_lock);
+    return -1;
+  }
+  // 没有溢出，先释放原来的缓存
+  struct mbuf *prev_mbuf = tx_mbufs[tdt];
+  if (prev_mbuf != 0)
+  {
+    mbuffree(prev_mbuf);
+  }
+  // 填充描述符
+  d->addr = (uint64)m->head;
+  d->length = m->len;
+  d->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  d->status = 0;
+  // 填充mbuf
+  tx_mbufs[tdt] = m;
+  // 更新TDT，并向硬件发消息
+  regs[E1000_TDT] = (tdt + 1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
   return 0;
 }
 
@@ -115,6 +147,44 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+
+  // recv无需加锁，中断是串行的只会有一个CPU执行
+  // 如果加锁调用net_rx，net_rx会回reply调用transmit死锁
+
+  // 读RDT下一个
+  uint32 next = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+  struct rx_desc *d = &rx_ring[next];
+  // DD为0，说明碰到了RDH，缓冲区满了，硬件还没写完
+  while (d->status & E1000_RXD_STAT_DD)
+  {
+    // 为什么要先分配呢，因为如果分配失败了，此时已经交包了，那么下次读到的数据就不对，所以分配失败立刻回退
+    // 分配新mbuf
+    struct mbuf *new = mbufalloc(0);
+    if (new == 0)
+    {
+      // 当前失败，回退
+      regs[E1000_RDT] = (next + RX_RING_SIZE - 1) % RX_RING_SIZE;
+      return;
+    }
+
+    // 原包交给网络栈
+    rx_mbufs[next]->len = d->length;
+    net_rx(rx_mbufs[next]);
+
+    // 写入
+    rx_mbufs[next] = new;
+
+    // 写回，等待硬件读取
+    d->addr = (uint64)rx_mbufs[next]->head;
+    d->status = 0;
+    // 读下一个
+    next = (next + 1) % RX_RING_SIZE;
+    d = &rx_ring[next];
+  }
+
+  // 更新RDT
+  // next指向DD == 1的，所以应该放到前一个
+  regs[E1000_RDT] = (next + RX_RING_SIZE - 1) % RX_RING_SIZE;
 }
 
 void
