@@ -39,7 +39,7 @@ struct kmem_list {
 struct kmem_list kmem_array[NCPU];
 
 // kinit最开始只有CPU0调用
-// 根据CPU只能操作本表的原则，简单起见将初始空闲页全部挂到CPU0的链表上
+// CPU0将页表分散平均挂载到不同的链表上面
 void
 kinit()
 {
@@ -50,18 +50,27 @@ kinit()
     initlock(&kmem_array[i].lock, kmem_array[i].lock_name);
     kmem_array[i].freelist = 0;
   }
-  // 释放全部，全部挂载到CPU0所在的链表
+  // 释放全部
   freerange(end, (void *)PHYSTOP);
 }
 
 // freerange仅在启动初始化时调用，不加锁
+// 平均分配页到每一个链表
+// 事实上，由于只有在启动阶段调用，中断都没开，可以不加锁
 void
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
-    kfree(p);
+  int count = 0;
+  for (; p + PGSIZE <= (char *)pa_end; p += PGSIZE)
+  {
+    memset(p, 1, PGSIZE);
+    struct run *r = (struct run *)p;
+    r->next = kmem_array[count % NCPU].freelist;
+    kmem_array[count % NCPU].freelist = r;
+    count++;
+  }
 }
 
 // 将对应页释放，加在对应CPU的空闲链表上
@@ -121,12 +130,10 @@ kalloc(void)
     // 先释放锁退出
     release(&curr->lock);
     // 尝试获取别的CPU的链表
-    for (int i = 0; i < NCPU; i++)
+    // 从自己的之后一个CPU开始
+    for (int j = 1; j < NCPU; j++)
     {
-      if (i == cpu)
-      {
-        continue;
-      }
+      int i = (j + cpu) % NCPU;
       struct kmem_list *dest = &kmem_array[i];
       acquire(&dest->lock);
       if (dest->freelist == 0)
