@@ -14,22 +14,47 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+/*
+ * 为每一个CPU维持一个空闲链表，遵循LRU原则
+ * 由于只需要保证每个链表内部LRU，因此不需要维持全局LRU链表（参考CSAPP Malloc LAB)
+ * 为每个链表维持一个锁
+ * 必须注意死锁问题，所有的锁都按照CPU顺序拿，不能先拿自己的，再去拿别人的，会死锁
+ * run结构体中的next指针，既是下一个链表节点的地址，也是空闲页的地址，因为节点就存在空闲页的前8个字节里面
+ */
+
+// run自己的地址既是空闲页物理地址，也是结构体的地址
 struct run {
   struct run *next;
 };
 
-struct {
+// 单独一条链表
+struct kmem_list {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+  // 没地方存锁名字，干脆存这里
+  char lock_name[16];
+};
 
+// 全局链表数组
+struct kmem_list kmem_array[NCPU];
+
+// kinit最开始只有CPU0调用
+// 根据CPU只能操作本表的原则，简单起见将初始空闲页全部挂到CPU0的链表上
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  // 先初始化所有锁，将链表头设为NULL
+  for (int i = 0; i < NCPU; i++)
+  {
+    snprintf(kmem_array[i].lock_name, 16, "kmem_%d", i);
+    initlock(&kmem_array[i].lock, kmem_array[i].lock_name);
+    kmem_array[i].freelist = 0;
+  }
+  // 释放全部，全部挂载到CPU0所在的链表
+  freerange(end, (void *)PHYSTOP);
 }
 
+// freerange仅在启动初始化时调用，不加锁
 void
 freerange(void *pa_start, void *pa_end)
 {
@@ -39,10 +64,8 @@ freerange(void *pa_start, void *pa_end)
     kfree(p);
 }
 
-// Free the page of physical memory pointed at by v,
-// which normally should have been returned by a
-// call to kalloc().  (The exception is when
-// initializing the allocator; see kinit above.)
+// 将对应页释放，加在对应CPU的空闲链表上
+// 需要获取对应的锁
 void
 kfree(void *pa)
 {
@@ -56,27 +79,77 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  // 关中断获取CPU序号
+  push_off();
+  int cpu = cpuid();
+  
+
+  struct kmem_list *curr = &kmem_array[cpu];
+
+  acquire(&curr->lock);
+  r->next = curr->freelist;
+  curr->freelist = r;
+  release(&curr->lock);
+
+  // 直到现在才开中断，为了保持全过程CPUID都是准确的
+  pop_off();
 }
 
-// Allocate one 4096-byte page of physical memory.
-// Returns a pointer that the kernel can use.
-// Returns 0 if the memory cannot be allocated.
+// 分配一页
 void *
 kalloc(void)
 {
-  struct run *r;
+  struct run *r = 0;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  // 关中断获取CPU序号
+  push_off();
+  int cpu = cpuid();
+  
+  struct kmem_list *curr = &kmem_array[cpu];
 
+  acquire(&curr->lock);
+  r = curr->freelist;
   if(r)
-    memset((char*)r, 5, PGSIZE); // fill with junk
+  {
+    // 找到了
+    curr->freelist = r->next;
+    release(&curr->lock);
+  }
+  else
+  {
+    // 没找到，需要找其他CPU的链表
+    // 先释放锁退出
+    release(&curr->lock);
+    // 尝试获取别的CPU的链表
+    for (int i = 0; i < NCPU; i++)
+    {
+      if (i == cpu)
+      {
+        continue;
+      }
+      struct kmem_list *dest = &kmem_array[i];
+      acquire(&dest->lock);
+      if (dest->freelist == 0)
+      {
+        // 没有，释放锁跳过
+        release(&dest->lock);
+      }
+      else
+      {
+        // 找到有了的
+        r = dest->freelist;
+        dest->freelist = r->next;
+        release(&dest->lock);
+        break;
+      }
+    }
+  }
+  
+  if(r)
+  {
+    memset((char *)r, 5, PGSIZE); // fill with junk
+  }
+  
+  pop_off();
   return (void*)r;
 }
