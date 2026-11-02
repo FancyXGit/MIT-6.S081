@@ -5,6 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "fcntl.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "proc.h"
+#include "file.h"
 
 /*
  * the kernel's page table.
@@ -432,3 +437,79 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+// 仅用于处理mmap的缺页
+int vmfault(uint64 addr)
+{
+  struct proc *p = myproc();
+  struct vma *vma_list = p->vma;
+  struct vma *vma = 0;
+  addr = PGROUNDDOWN(addr);
+
+  // 检查是否是vma缺页，找到对应vma
+  for (int i = 0; i < NVMAPROC; i++)
+  {
+    struct vma *curr_vma = &vma_list[i];
+    if (curr_vma->valid == 1)
+    {
+      if (addr >= curr_vma->start && addr - curr_vma->start < curr_vma->length)
+      {
+        // 在 [start , start + length) 左闭右开区间
+        vma = curr_vma;
+        break;
+      }
+    }
+  }
+  if (vma == 0)
+  {
+    return -1;
+  }
+
+  // 分配物理内存
+  uint64 pa = (uint64)kalloc();
+  if (pa == 0)
+  {
+    return -1;
+  }
+
+  // 检查设置用户权限
+  int pte_r = 0;
+  int pte_w = 0;
+  if (vma->prot & PROT_READ)
+  {
+    pte_r = PTE_R;
+  }
+  if (vma->prot & PROT_WRITE)
+  {
+    pte_r = PTE_R;
+    pte_w = PTE_W;
+  }
+
+  // 读文件
+  uint64 mem_offset = addr - vma->start; // vma.offset一定为0
+  struct inode *i = vma->f->ip;
+  ilock(i);
+  int len = readi(i, 0, pa, mem_offset, PGSIZE);
+  iunlock(i);
+
+  // 把剩余的清0
+  if (len < 0)
+  {
+    kfree((void *)pa);
+    return -1;
+  }
+  if (len < PGSIZE)
+  {
+    memset((char *)pa + len, 0, PGSIZE - len);
+  }
+
+  // 映射
+  if (mappages(p->pagetable, addr, PGSIZE, pa, PTE_U | pte_r | pte_w) < 0)
+  {
+    kfree((void *)pa);
+    return -1;
+  }
+
+  return 0;
+}
+

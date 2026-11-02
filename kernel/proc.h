@@ -93,9 +93,6 @@ struct vma
   int offset;     // 文件偏移
 };
 
-// 每个进程中的vma数组长度
-#define NVMAPROC 16
-
 // Per-process state
 struct proc {
   struct spinlock lock;
