@@ -178,9 +178,9 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      continue;;
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      continue;
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -486,7 +486,7 @@ int vmfault(uint64 addr)
   }
 
   // 读文件
-  uint64 mem_offset = addr - vma->start; // vma.offset一定为0
+  uint64 mem_offset = addr - vma->start + vma->offset; // vma.offset不一定为0，一定页对齐
   struct inode *i = vma->f->ip;
   ilock(i);
   int len = readi(i, 0, pa, mem_offset, PGSIZE);

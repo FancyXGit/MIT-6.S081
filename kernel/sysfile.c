@@ -499,6 +499,15 @@ sys_mmap(void)
     return -1;
   }
 
+  // 特意加，MAP_SHARED，PROT_WRITE必须要文件可读
+  if (f == 0 || f->type == FD_PIPE)
+    return -1;
+
+  if ((prot & PROT_READ) && !f->readable)
+    return -1;
+  if ((prot & PROT_WRITE) && (flags & MAP_SHARED) && !f->writable)
+    return -1; 
+
   struct proc *p = myproc();
 
   // 对齐
@@ -554,5 +563,105 @@ sys_mmap(void)
 uint64
 sys_munmap(void)
 {
-  return -1;
+  uint64 addr;
+  int length;
+  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+  {
+    return -1;
+  }
+
+  // 这里复制黏贴了一下vmfault，有点丑陋
+  struct proc *p = myproc();
+  struct vma *vma_list = p->vma;
+  struct vma *vma = 0;
+  addr = PGROUNDDOWN(addr);
+  if (length < 0)
+  {
+    return -1;
+  }
+  length = PGROUNDUP(length);
+
+  // 检查是否是vma缺页，找到对应vma
+  for (int i = 0; i < NVMAPROC; i++)
+  {
+    struct vma *curr_vma = &vma_list[i];
+    if (curr_vma->valid == 1)
+    {
+      if (addr >= curr_vma->start && addr - curr_vma->start < curr_vma->length)
+      {
+        // 在 [start , start + length) 左闭右开区间
+        vma = curr_vma;
+        break;
+      }
+    }
+  }
+  if (vma == 0)
+  {
+    return -1;
+  }
+  if (addr < vma->start || addr + length > vma->start + vma->length)
+  {
+    return -1;
+  }
+
+  // 对于中间开洞的情况报错
+  int head_situation = (addr == vma->start);
+  int tail_situation = ((addr + length) == (vma->start + vma->length));
+  if (!(head_situation || tail_situation))
+  {
+    return -1;
+  }
+
+  // 写回磁盘
+  if (vma->flags & MAP_SHARED)
+  {
+    struct inode *ip = vma->f->ip;
+    uint64 file_off = vma->offset + addr - vma->start;
+    uint64 n = length;
+    ilock(ip);
+    if (file_off + n > ip->size)
+    {
+      // 控制不写越界
+      n = (file_off < ip->size) ? ip->size - file_off : 0;
+    }
+    iunlock(ip);
+
+    if (n > 0)
+    {
+      begin_op();
+      ilock(ip);
+      if (writei(ip, 1, addr, file_off, n) < 0)
+      {
+        iunlock(ip);
+        end_op();
+        return -1;
+      }
+      iunlock(ip);
+      end_op();
+    }
+  }
+
+  // 取消映射并且释放内存
+  uvmunmap(p->pagetable, addr, length / PGSIZE, 1);
+
+  // 修改vma结构体
+  if (head_situation)
+  {
+    vma->start += length;
+    vma->length -= length;
+    vma->offset += length;
+  }
+  else if (tail_situation)
+  {
+    vma->length -= length;
+  }
+
+  // 检查是否完成释放
+  if (vma->length == 0)
+  {
+    fileclose(vma->f);
+    vma->valid = 0;
+  }
+
+  return 0;
 }
