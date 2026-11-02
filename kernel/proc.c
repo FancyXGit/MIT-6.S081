@@ -285,8 +285,19 @@ fork(void)
     return -1;
   }
 
+  // 拷贝vma
+  for (int i = 0; i < NVMAPROC; i++)
+  {
+    np->vma[i] = p->vma[i];
+    if (p->vma[i].valid == 1)
+    {
+      filedup(np->vma[i].f);
+    }
+  }
+
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0)
+  {
     freeproc(np);
     release(&np->lock);
     return -1;
