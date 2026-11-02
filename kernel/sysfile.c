@@ -488,7 +488,67 @@ sys_pipe(void)
 uint64
 sys_mmap(void)
 {
-  return -1;
+  uint64 addr;
+  int length;
+  int prot, flags;
+  struct file *f;
+  int offset;
+
+  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0 || argint(2, &prot) < 0 || argint(3, &flags) < 0 || argfd(4, 0, &f) < 0 || argint(5, &offset) < 0)
+  {
+    return -1;
+  }
+
+  struct proc *p = myproc();
+
+  // 对齐
+  if (addr % PGSIZE != 0)
+  {
+    return -1;
+  }
+  length = PGROUNDUP(length);
+
+  // 如果addr为0，将其分配到proc->sz向上
+  if (addr == 0)
+  {
+    if (p->sz + length >= MAXVA)
+    {
+      return -1;
+    }
+    addr = p->sz;
+    p->sz += length;
+  }
+
+  struct vma *vma_list = p->vma;
+
+  // 填入vma数组
+  int found = 0;
+  for (int i = 0; i < NVMAPROC; i++)
+  {
+    struct vma *curr_vma = &vma_list[i];
+    if (curr_vma->valid == 0)
+    {
+      found = 1;
+      curr_vma->valid = 1;
+      curr_vma->start = addr;
+      curr_vma->length = length;
+      curr_vma->prot = prot;
+      curr_vma->flags = flags;
+      curr_vma->f = f;
+      curr_vma->offset = offset;
+      break;
+    }
+  }
+  if (found == 0)
+  {
+    printf("mmap: too much vma\n");
+    return -1;
+  }
+
+  // 增加文件计次
+  filedup(f);
+
+  return addr;
 }
 
 uint64
