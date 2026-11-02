@@ -316,6 +316,58 @@ sys_open(void)
     }
   }
 
+  // 为SYMLINK类型且没有设置O_NOFOLLOW
+  // 需要找到指向的文件打开
+  if (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW))
+  {
+    char target[MAXPATH];
+    int depth = 0;
+    // 重复递归执行，遍历所有SYMLINK链
+    while (depth < 10)
+    {
+      int len = readi(ip, 0, (uint64)target, 0, MAXPATH - 1);
+      if (len <= 0)
+      {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      target[len] = '\0';
+      // 先放SYMLINK锁，避免namei死锁
+      iunlockput(ip);
+      struct inode *t_ip = namei(target);
+      if (t_ip == 0)
+      {
+        end_op();
+        return -1;
+      }
+
+      ilock(t_ip);
+      ip = t_ip; // 下面将ip换为t_ip执行
+      if (ip->type != T_SYMLINK)
+      {
+        break;
+      }
+      depth++;
+    }
+
+    // 检查是否溢出
+    if (ip->type == T_SYMLINK)
+    {
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+
+    // 重复一遍上面的检查
+    if (ip->type == T_DIR && omode != O_RDONLY)
+    {
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+  }
+
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
@@ -485,8 +537,40 @@ sys_pipe(void)
   return 0;
 }
 
+// 只是简单把路径名target写入文件
 uint64
 sys_symlink(void)
 {
-  return -1;
+  uint64 target, path;
+  if (argaddr(0, &target) < 0 || argaddr(1, &path) < 0)
+  {
+    return -1;
+  }
+
+  char kpath[MAXPATH];
+  if (copyin(myproc()->pagetable, kpath, path, MAXPATH - 1) < 0)
+  {
+    return -1;
+  }
+  kpath[MAXPATH - 1] = '\0';
+
+  begin_op();
+  struct inode *ip = create(kpath, T_SYMLINK, 0, 0);
+  if (ip == 0)
+  {
+    end_op();
+    return -1;
+  }
+
+  if (writei(ip, 1, target, 0, MAXPATH) <= 0)
+  {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+
+  return 0;
 }
