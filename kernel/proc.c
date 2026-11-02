@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -351,6 +355,55 @@ exit(int status)
       fileclose(f);
       p->ofile[fd] = 0;
     }
+  }
+
+  // 清理vma
+  for (int i = 0; i < NVMAPROC; i++)
+  {
+    struct vma *curr_vma = &p->vma[i];
+    if (curr_vma->valid == 0)
+    {
+      continue;
+    }
+    // 写回数据
+    if (curr_vma->flags & MAP_SHARED)
+    {
+      struct inode *ip = curr_vma->f->ip;
+      ilock(ip);
+      int size = ip->size;
+      iunlock(ip);
+      // 在循环中一次写一页
+      for (uint64 ad = curr_vma->start; ad < curr_vma->start + curr_vma->length; ad += PGSIZE)
+      {
+        uint64 pa = walkaddr(p->pagetable, ad);
+        if (pa == 0)
+        {
+          continue;
+        }
+
+        uint64 off = curr_vma->offset + (ad - curr_vma->start);  // 文件偏移
+        if (off >= size) // 超出文件直接返回
+        {
+          break;
+        }
+        uint64 n = PGSIZE;
+        if (off + n > size)
+        {
+          n = size - off; // 最尾部检查
+        }
+
+        begin_op();
+        ilock(ip);
+        writei(ip, 1, ad, off, n);
+        iunlock(ip);
+        end_op();
+      }
+    }
+    // 释放文件
+    fileclose(curr_vma->f);
+    // 解除映射，同时释放物理内存
+    uvmunmap(p->pagetable, curr_vma->start, curr_vma->length / PGSIZE, 1);
+    curr_vma->valid = 0;
   }
 
   begin_op();
